@@ -13,8 +13,26 @@ const FlipBook = () => {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
+  const [fileName, setFileName] = useState("");
 
-  // Handle fullscreen mode
+  // Load from localStorage on component mount
+  useEffect(() => {
+    const storedPages = localStorage.getItem("pdfPages");
+    const storedFileName = localStorage.getItem("pdfFileName");
+
+    if (storedPages) {
+      try {
+        setPages(JSON.parse(storedPages));
+        setFileName(storedFileName || "Saved PDF");
+        setFullscreen(true);
+      } catch (error) {
+        console.error("Error loading PDF from localStorage:", error);
+        clearLocalStorage();
+      }
+    }
+  }, []);
+
+  // Update fullscreen state based on pages
   useEffect(() => {
     if (pages.length > 0 && !isLoading) {
       setFullscreen(true);
@@ -23,10 +41,33 @@ const FlipBook = () => {
     }
   }, [pages, isLoading]);
 
+  // Function to save PDF to localStorage
+  const saveToLocalStorage = (pdfPages, name) => {
+    try {
+      localStorage.setItem("pdfPages", JSON.stringify(pdfPages));
+      localStorage.setItem("pdfFileName", name);
+    } catch (error) {
+      console.error("Error saving to localStorage:", error);
+      // If localStorage is full, show a message
+      if (error.name === "QuotaExceededError") {
+        alert(
+          "The PDF is too large to store. Only the current session will be saved."
+        );
+      }
+    }
+  };
+
+  // Function to clear localStorage
+  const clearLocalStorage = () => {
+    localStorage.removeItem("pdfPages");
+    localStorage.removeItem("pdfFileName");
+  };
+
   const handleFileChange = async (event) => {
     const file = event.target.files[0];
     if (file && file.type === "application/pdf") {
       setSelectedFile(file);
+      setFileName(file.name);
       setIsLoading(true);
       setPages([]); // Clear any previous pages
       setZoomLevel(1); // Reset zoom level
@@ -71,6 +112,9 @@ const FlipBook = () => {
             loadedPages.push(canvas.toDataURL("image/png"));
           }
 
+          // Save to localStorage
+          saveToLocalStorage(loadedPages, file.name);
+
           setPages(loadedPages);
           resolve();
         } catch (error) {
@@ -84,12 +128,16 @@ const FlipBook = () => {
 
   // Function to exit fullscreen and upload a new PDF
   const handleReset = () => {
+    // Clear localStorage when exiting
+    clearLocalStorage();
+
     setSelectedFile(null);
     setPages([]);
     setIsLoading(false);
     setLoadingProgress(0);
     setFullscreen(false);
     setZoomLevel(1);
+    setFileName("");
   };
 
   // Zoom functions
@@ -108,9 +156,7 @@ const FlipBook = () => {
   return (
     <div
       className={`flex flex-col items-center justify-center ${
-        fullscreen
-          ? "fixed inset-0 z-50 bg-black"
-          : "min-h-screen bg-gray-200 p-4"
+        fullscreen ? "fixed inset-0 z-50 " : "min-h-screen bg-gray-200 p-4"
       }`}
     >
       {/* Only show upload section when not in fullscreen mode */}
@@ -152,27 +198,30 @@ const FlipBook = () => {
       {pages.length > 0 && !isLoading && (
         <>
           <div className="relative w-full h-full flex flex-col">
-            {/* Exit button in top-right corner */}
-            <button
-              onClick={handleReset}
-              className="absolute top-4 right-4 z-10 p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition shadow-lg"
-              aria-label="Exit fullscreen and upload new PDF"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+            {/* File name and Exit button in top bar */}
+            <div className="absolute top-0 left-0 right-0 z-10 flex justify-between items-center p-4  bg-opacity-50">
+              <p className="text-black truncate max-w-md">{fileName}</p>
+              <button
+                onClick={handleReset}
+                className="p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition shadow-lg"
+                aria-label="Exit fullscreen and upload new PDF"
               >
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
 
             {/* Fullscreen FlipBook with zoom applied */}
             <div className="flex-1 w-full h-full">
