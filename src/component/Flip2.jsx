@@ -94,11 +94,11 @@ const FlipBook = () => {
 
   // Zoom functions
   const zoomIn = () => {
-    setZoomLevel((prevZoom) => Math.min(prevZoom + 0.25, 3)); // Max zoom 3x
+    setZoomLevel((prevZoom) => Math.min(prevZoom + 0.25, 3));
   };
 
   const zoomOut = () => {
-    setZoomLevel((prevZoom) => Math.max(prevZoom - 0.25, 0.5)); // Min zoom 0.5x
+    setZoomLevel((prevZoom) => Math.max(prevZoom - 0.25, 0.5));
   };
 
   const resetZoom = () => {
