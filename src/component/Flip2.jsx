@@ -1,82 +1,167 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import FlipPage from "react-flip-page";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
-
+import axios from "axios";
 // Set PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+// Cloudinary configuration - replace with your own details
+const CLOUDINARY_UPLOAD_PRESET = "pdf_upload";
+const CLOUDINARY_CLOUD_NAME = "dwxl9ghve";
+const CLOUDINARY_UPLOAD_URL = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+const API_KEY = 296791277168885;
+const API_SECRET = "Yas_CZkZcdFO45s9XGOkPCiHF1M";
+const FOLDER_NAME = "Flipbook_Data";
+const PUBLIC_ID = `${FOLDER_NAME}/`;
 const FlipBook = () => {
-  const [pages, setPages] = useState([]);
+  const [pdfDocument, setPdfDocument] = useState(null);
+  const [renderedPages, setRenderedPages] = useState([]);
+  const [visiblePageIndices, setVisiblePageIndices] = useState([0, 1]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [fileName, setFileName] = useState("");
+  const [totalPages, setTotalPages] = useState(0);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [cloudinaryUrl, setCloudinaryUrl] = useState("");
+  const [storedPdfId, setStoredPdfId] = useState("");
+  const flipPageRef = useRef(null);
 
-  // Load from localStorage on component mount
+  // Load session data on component mount
   useEffect(() => {
-    const storedPages = localStorage.getItem("pdfPages");
+    const storedPdfId = localStorage.getItem("pdfId");
     const storedFileName = localStorage.getItem("pdfFileName");
+    const storedCloudinaryUrl = localStorage.getItem("pdfCloudinaryUrl");
+    const storedTotalPages = localStorage.getItem("pdfTotalPages");
 
-    if (storedPages) {
-      try {
-        setPages(JSON.parse(storedPages));
-        setFileName(storedFileName || "Saved PDF");
-        setFullscreen(true);
-      } catch (error) {
-        console.error("Error loading PDF from localStorage:", error);
-        clearLocalStorage();
-      }
+    if (storedPdfId && storedCloudinaryUrl) {
+      setStoredPdfId(storedPdfId);
+      setFileName(storedFileName || "Saved PDF");
+      setCloudinaryUrl(storedCloudinaryUrl);
+      setTotalPages(parseInt(storedTotalPages || "0"));
+      setFullscreen(true);
+      loadPdfFromUrl(storedCloudinaryUrl);
     }
   }, []);
 
-  // Update fullscreen state based on pages
+  // Lazy rendering of pages based on visibility
   useEffect(() => {
-    if (pages.length > 0 && !isLoading) {
+    if (pdfDocument && visiblePageIndices.length > 0) {
+      visiblePageIndices.forEach(async (index) => {
+        if (index >= 0 && index < totalPages && !renderedPages[index]) {
+          renderPage(index);
+        }
+      });
+    }
+  }, [pdfDocument, visiblePageIndices, renderedPages, totalPages]);
+
+  // Update fullscreen state based on PDF document
+  useEffect(() => {
+    if (pdfDocument && !isLoading) {
       setFullscreen(true);
-    } else {
+    } else if (!isLoading && !storedPdfId) {
       setFullscreen(false);
     }
-  }, [pages, isLoading]);
+  }, [pdfDocument, isLoading, storedPdfId]);
 
-  // Function to save PDF to localStorage
-  const saveToLocalStorage = (pdfPages, name) => {
+  // Call the function
+
+  // Function to load PDF from URL (Cloudinary or other)
+  const loadPdfFromUrl = async (url) => {
     try {
-      localStorage.setItem("pdfPages", JSON.stringify(pdfPages));
-      localStorage.setItem("pdfFileName", name);
+      setIsLoading(true);
+      setLoadingProgress(10);
+      console.log("loadfrom url :", url);
+
+      const loadingTask = pdfjs.getDocument(url);
+      const pdf = await loadingTask.promise;
+
+      setTotalPages(pdf.numPages);
+      setPdfDocument(pdf);
+
+      // Initialize renderedPages array with nulls
+      setRenderedPages(new Array(pdf.numPages).fill(null));
+      setLoadingProgress(100);
+      setIsLoading(false);
+
+      // Render first two pages immediately
+      setTimeout(() => {
+        renderPage(0);
+        if (pdf.numPages > 1) renderPage(1);
+      }, 100);
     } catch (error) {
-      console.error("Error saving to localStorage:", error);
-      // If localStorage is full, show a message
-      if (error.name === "QuotaExceededError") {
-        alert(
-          "The PDF is too large to store. Only the current session will be saved."
-        );
-      }
+      console.error("Error loading PDF from URL:", error);
+      alert("Error loading PDF from stored URL. Please try uploading again.");
+      setIsLoading(false);
+      handleReset();
     }
   };
 
-  // Function to clear localStorage
-  const clearLocalStorage = () => {
-    localStorage.removeItem("pdfPages");
-    localStorage.removeItem("pdfFileName");
+  // Function to render a specific page
+  const renderPage = async (pageIndex) => {
+    if (!pdfDocument || pageIndex < 0 || pageIndex >= totalPages) return;
+
+    try {
+      const page = await pdfDocument.getPage(pageIndex + 1);
+      const viewport = page.getViewport({ scale: 1.5 }); // Lower scale for better performance
+
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      // Update the renderedPages array with the new page
+      setRenderedPages((prev) => {
+        const newPages = [...prev];
+        newPages[pageIndex] = canvas.toDataURL("image/jpeg", 0.75); // Use JPEG with compression for better performance
+        return newPages;
+      });
+    } catch (error) {
+      console.error(`Error rendering page ${pageIndex + 1}:`, error);
+    }
   };
 
+  // Handle file selection
   const handleFileChange = async (event) => {
     const file = event.target.files[0];
+    if (!file) return;
     if (file && file.type === "application/pdf") {
       setSelectedFile(file);
       setFileName(file.name);
       setIsLoading(true);
-      setPages([]); // Clear any previous pages
-      setZoomLevel(1); // Reset zoom level
+      setPdfDocument(null);
+      setRenderedPages([]);
+      setZoomLevel(1);
+      setVisiblePageIndices([0, 1]);
+      setCurrentPageIndex(0);
+
       try {
-        await loadPDF(file);
+        // First upload to Cloudinary
+        setLoadingProgress(5);
+        const cloudinaryUrl = await uploadToCloudinary(file);
+        console.log("Cloudinary URL:", cloudinaryUrl);
+        setCloudinaryUrl(cloudinaryUrl);
+
+        // Generate a unique ID for this PDF
+        const pdfId = Date.now().toString();
+        setStoredPdfId(pdfId);
+
+        // Save references to localStorage
+        localStorage.setItem("pdfId", pdfId);
+        localStorage.setItem("pdfFileName", file.name);
+        localStorage.setItem("pdfCloudinaryUrl", cloudinaryUrl);
+        localStorage.setItem("pdfTotalPages", "0"); // Will be updated after loading PDF
+
+        // Now load the PDF from the URL
+        await loadPdfFromUrl(cloudinaryUrl);
       } catch (error) {
-        console.error("Error loading PDF:", error);
-        alert("Error loading PDF. Please try again.");
-      } finally {
+        console.error("Error processing PDF:", error);
+        alert("Error uploading or processing the PDF. Please try again.");
         setIsLoading(false);
       }
     } else {
@@ -84,60 +169,109 @@ const FlipBook = () => {
     }
   };
 
-  const loadPDF = async (file) => {
+  // Upload file to Cloudinary
+  const uploadToCloudinary = async (file) => {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsArrayBuffer(file);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+      formData.append("folder", "Flipbook_Data");
+      formData.append("cloud_name", CLOUDINARY_CLOUD_NAME);
 
-      reader.onload = async (e) => {
-        try {
-          const pdfData = new Uint8Array(e.target.result);
-          const pdf = await pdfjs.getDocument({ data: pdfData }).promise;
-          const numPages = pdf.numPages;
-          const loadedPages = [];
+      fetch(CLOUDINARY_UPLOAD_URL, {
+        method: "POST",
+        body: formData,
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          if (data.secure_url) {
+            // console.log("usrl ", data.secure_url);
 
-          for (let i = 1; i <= numPages; i++) {
-            // Update loading progress
-            setLoadingProgress(Math.floor((i / numPages) * 100));
-
-            const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 2.5 });
-
-            const canvas = document.createElement("canvas");
-            const context = canvas.getContext("2d");
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-
-            await page.render({ canvasContext: context, viewport }).promise;
-            loadedPages.push(canvas.toDataURL("image/png"));
+            resolve(data.secure_url);
+          } else {
+            reject(new Error("Failed to get secure URL from Cloudinary"));
           }
-
-          // Save to localStorage
-          saveToLocalStorage(loadedPages, file.name);
-
-          setPages(loadedPages);
-          resolve();
-        } catch (error) {
+        })
+        .catch((error) => {
           reject(error);
-        }
-      };
-
-      reader.onerror = reject;
+        });
     });
   };
 
-  // Function to exit fullscreen and upload a new PDF
+  //Fetch PDF from Cloudinary
+  const fetchPdfsFromCloudinary = async () => {
+    try {
+      const response = await axios.get(
+        `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/resources/search`,
+        {
+          params: { prefix: FOLDER_NAME },
+          auth: { username: API_KEY, password: API_SECRET },
+        }
+      );
+      console.log("fetch response ", response.data.resources);
+      // Filter PDFs only
+      const pdfs = response.data.resources.filter(
+        (file) => file.format === "pdf"
+      );
+
+      if (pdfs.length > 0) {
+        const pdfUrl = pdfs[0].secure_url; // Use the first PDF's URL
+        console.log("pdfUrl ", pdfUrl);
+
+        // loadPdfFromUrl(pdfUrl);
+      } else {
+        console.log("No PDFs found in Cloudinary.");
+      }
+    } catch (error) {
+      console.error("Error fetching PDFs:", error);
+    }
+  };
+  fetchPdfsFromCloudinary();
+  // Function to handle page turn
+  const handlePageTurn = useCallback(
+    (currentPageIndex) => {
+      setCurrentPageIndex(currentPageIndex);
+
+      // Calculate the visible page indices based on the current display
+      const pageIndices = [currentPageIndex * 2, currentPageIndex * 2 + 1];
+
+      // Also preload the next and previous pages for smoother experience
+      if (currentPageIndex > 0) {
+        pageIndices.push((currentPageIndex - 1) * 2);
+        pageIndices.push((currentPageIndex - 1) * 2 + 1);
+      }
+
+      if (currentPageIndex < Math.ceil(totalPages / 2) - 1) {
+        pageIndices.push((currentPageIndex + 1) * 2);
+        pageIndices.push((currentPageIndex + 1) * 2 + 1);
+      }
+
+      setVisiblePageIndices(
+        pageIndices.filter((i) => i >= 0 && i < totalPages)
+      );
+    },
+    [totalPages]
+  );
+
+  // Clear storage and reset state
   const handleReset = () => {
-    // Clear localStorage when exiting
-    clearLocalStorage();
+    localStorage.removeItem("pdfId");
+    localStorage.removeItem("pdfFileName");
+    localStorage.removeItem("pdfCloudinaryUrl");
+    localStorage.removeItem("pdfTotalPages");
 
     setSelectedFile(null);
-    setPages([]);
+    setPdfDocument(null);
+    setRenderedPages([]);
     setIsLoading(false);
     setLoadingProgress(0);
     setFullscreen(false);
     setZoomLevel(1);
     setFileName("");
+    setStoredPdfId("");
+    setCloudinaryUrl("");
+    setTotalPages(0);
+    setCurrentPageIndex(0);
   };
 
   // Zoom functions
@@ -156,10 +290,12 @@ const FlipBook = () => {
   return (
     <div
       className={`flex flex-col items-center justify-center ${
-        fullscreen ? "fixed inset-0 z-50 " : "min-h-screen bg-gray-200 p-4"
+        fullscreen
+          ? "fixed inset-0 z-50 bg-black"
+          : "min-h-screen bg-gray-200 p-4"
       }`}
     >
-      {/* Only show upload section when not in fullscreen mode */}
+      {/* Upload section */}
       {!fullscreen && (
         <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-md mb-4">
           <h2 className="text-xl font-bold mb-4 text-center">
@@ -178,12 +314,13 @@ const FlipBook = () => {
         </div>
       )}
 
-      {/* Improved Loader with Progress */}
+      {/* Loader */}
       {isLoading && (
         <div className="flex flex-col items-center justify-center w-full h-[300px] bg-white rounded-lg shadow-md p-6">
           <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-4"></div>
           <p className="text-gray-600 mb-2">
-            Loading PDF... {loadingProgress}%
+            {loadingProgress < 50 ? "Uploading PDF..." : "Processing PDF..."}
+            {" " + loadingProgress}%
           </p>
           <div className="w-64 h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
@@ -194,13 +331,20 @@ const FlipBook = () => {
         </div>
       )}
 
-      {/* Fullscreen FlipBook */}
-      {pages.length > 0 && !isLoading && (
+      {/* FlipBook */}
+      {pdfDocument && !isLoading && (
         <>
           <div className="relative w-full h-full flex flex-col">
-            {/* File name and Exit button in top bar */}
-            <div className="absolute top-0 left-0 right-0 z-10 flex justify-between items-center p-4  bg-opacity-50">
-              <p className="text-black truncate max-w-md">{fileName}</p>
+            {/* Top bar with file name and exit button */}
+            <div className="absolute top-0 left-0 right-0 z-10 flex justify-between items-center p-4 bg-black bg-opacity-50">
+              <div className="flex items-center">
+                <p className="text-white truncate max-w-md">{fileName}</p>
+                <span className="text-gray-300 ml-2">
+                  {Math.min(currentPageIndex * 2 + 1, totalPages)}-
+                  {Math.min(currentPageIndex * 2 + 2, totalPages)} of{" "}
+                  {totalPages}
+                </span>
+              </div>
               <button
                 onClick={handleReset}
                 className="p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition shadow-lg"
@@ -223,19 +367,22 @@ const FlipBook = () => {
               </button>
             </div>
 
-            {/* Fullscreen FlipBook with zoom applied */}
+            {/* FlipBook */}
             <div className="flex-1 w-full h-full">
               <FlipPage
+                ref={flipPageRef}
                 width={window.innerWidth}
                 height={window.innerHeight}
                 orientation="horizontal"
                 uncutPages={true}
                 flipOnTouch={true}
-                animationDuration={500}
+                animationDuration={400} // Slightly faster animation
                 className="flipbook-container"
                 showSwipeHint={true}
+                onPageChange={handlePageTurn}
+                maxAngle={25} // Lower angle for better performance
               >
-                {Array.from({ length: Math.ceil(pages.length / 2) }).map(
+                {Array.from({ length: Math.ceil(totalPages / 2) }).map(
                   (_, index) => (
                     <div
                       key={index}
@@ -245,17 +392,48 @@ const FlipBook = () => {
                         transformOrigin: "center center",
                       }}
                     >
-                      <img
-                        src={pages[index * 2]}
-                        alt={`Page ${index * 2 + 1}`}
-                        className="w-1/2 h-full object-contain bg-white"
-                      />
-                      {pages[index * 2 + 1] && (
-                        <img
-                          src={pages[index * 2 + 1]}
-                          alt={`Page ${index * 2 + 2}`}
-                          className="w-1/2 h-full object-contain bg-white"
-                        />
+                      {/* Left page */}
+                      {index * 2 < totalPages && (
+                        <div className="w-1/2 h-full bg-white flex items-center justify-center">
+                          {renderedPages[index * 2] ? (
+                            <img
+                              src={renderedPages[index * 2]}
+                              alt={`Page ${index * 2 + 1}`}
+                              className="w-full h-full object-contain"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="animate-pulse flex items-center justify-center w-full h-full bg-gray-200">
+                              <p className="text-gray-500">
+                                Loading page {index * 2 + 1}...
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Right page */}
+                      {index * 2 + 1 < totalPages ? (
+                        <div className="w-1/2 h-full bg-white flex items-center justify-center">
+                          {renderedPages[index * 2 + 1] ? (
+                            <img
+                              src={renderedPages[index * 2 + 1]}
+                              alt={`Page ${index * 2 + 2}`}
+                              className="w-full h-full object-contain"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="animate-pulse flex items-center justify-center w-full h-full bg-gray-200">
+                              <p className="text-gray-500">
+                                Loading page {index * 2 + 2}...
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="w-1/2 h-full bg-gray-100 flex items-center justify-center">
+                          <p className="text-gray-400">End of document</p>
+                        </div>
                       )}
                     </div>
                   )
@@ -263,13 +441,22 @@ const FlipBook = () => {
               </FlipPage>
             </div>
 
-            {/* Zoom controls at bottom center */}
-            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-10 flex items-center space-x-2 bg-black bg-opacity-50 rounded-full p-2 shadow-lg">
+            {/* Controls */}
+            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10 flex items-center space-x-2 bg-black bg-opacity-50 p-2 rounded-full">
+              {/* Previous page button */}
               <button
-                onClick={zoomOut}
-                className="p-2 bg-gray-800 text-white rounded-full hover:bg-gray-700 transition"
-                aria-label="Zoom out"
-                disabled={zoomLevel <= 0.5}
+                onClick={() => {
+                  if (flipPageRef.current && currentPageIndex > 0) {
+                    flipPageRef.current.gotoPreviousPage();
+                  }
+                }}
+                disabled={currentPageIndex === 0}
+                className={`p-2 rounded-full ${
+                  currentPageIndex === 0
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                } transition`}
+                aria-label="Previous page"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -282,24 +469,40 @@ const FlipBook = () => {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                  <line x1="8" y1="11" x2="14" y2="11"></line>
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+
+              {/* Zoom controls */}
+              <button
+                onClick={zoomOut}
+                disabled={zoomLevel <= 0.5}
+                className={`p-2 rounded-full ${
+                  zoomLevel <= 0.5
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                } transition`}
+                aria-label="Zoom out"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
 
               <button
                 onClick={resetZoom}
-                className="px-3 py-1 bg-gray-800 text-white text-sm rounded-full hover:bg-gray-700 transition"
-              >
-                {Math.round(zoomLevel * 100)}%
-              </button>
-
-              <button
-                onClick={zoomIn}
-                className="p-2 bg-gray-800 text-white rounded-full hover:bg-gray-700 transition"
-                aria-label="Zoom in"
-                disabled={zoomLevel >= 3}
+                className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition"
+                aria-label="Reset zoom"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -312,10 +515,67 @@ const FlipBook = () => {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                  <line x1="11" y1="8" x2="11" y2="14"></line>
-                  <line x1="8" y1="11" x2="14" y2="11"></line>
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              </button>
+
+              <button
+                onClick={zoomIn}
+                disabled={zoomLevel >= 3}
+                className={`p-2 rounded-full ${
+                  zoomLevel >= 3
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                } transition`}
+                aria-label="Zoom in"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+
+              {/* Next page button */}
+              <button
+                onClick={() => {
+                  if (
+                    flipPageRef.current &&
+                    currentPageIndex < Math.ceil(totalPages / 2) - 1
+                  ) {
+                    flipPageRef.current.gotoNextPage();
+                  }
+                }}
+                disabled={currentPageIndex >= Math.ceil(totalPages / 2) - 1}
+                className={`p-2 rounded-full ${
+                  currentPageIndex >= Math.ceil(totalPages / 2) - 1
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                } transition`}
+                aria-label="Next page"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M9 18l6-6-6-6" />
                 </svg>
               </button>
             </div>
@@ -323,15 +583,13 @@ const FlipBook = () => {
         </>
       )}
 
-      {!isLoading && pages.length === 0 && selectedFile && (
-        <div className="text-center p-4 bg-red-100 border border-red-300 rounded-lg">
-          <p className="text-red-600">Failed to load PDF. Please try again.</p>
-          <button
-            onClick={handleReset}
-            className="mt-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition text-sm"
-          >
-            Try Again
-          </button>
+      {/* Footer */}
+      {!fullscreen && !isLoading && (
+        <div className="mt-4 text-center text-gray-500 text-sm">
+          <p>
+            Upload your PDF to view it as an interactive flipbook. Your PDF will
+            be stored in your browser for future sessions.
+          </p>
         </div>
       )}
     </div>
