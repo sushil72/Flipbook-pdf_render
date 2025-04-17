@@ -350,7 +350,6 @@ const FlipBook = () => {
 
     // Check if page is already being rendered
     if (renderingPages.current.has(pageNumber)) {
-      // Return a promise that resolves when the page is ready
       return new Promise((resolve) => {
         const checkCache = () => {
           if (pageCache.current[pageNumber]) {
@@ -371,62 +370,31 @@ const FlipBook = () => {
       const scale = 1.5 * zoomLevel; // Base scale adjusted by zoom level
       const viewport = page.getViewport({ scale });
 
-      // Calculate appropriate scale based on device pixel ratio and zoom
-      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2); // Cap at 2x for performance
-      const scaledViewport = page.getViewport({ scale: scale * pixelRatio });
-
-      // For very large PDFs, reduce the scale for performance
-      const qualityScale = totalPages > 300 ? 0.8 : 1;
-
-      // Create a canvas with appropriate resolution
       const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d", { alpha: false });
-      canvas.width = scaledViewport.width * qualityScale;
-      canvas.height = scaledViewport.height * qualityScale;
+      const context = canvas.getContext("2d");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
 
-      // Adjust canvas style for correct display size
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-
-      // Render page to canvas with optimized settings
       const renderContext = {
         canvasContext: context,
-        viewport: scaledViewport,
-        renderInteractiveForms: false, // Disable form rendering for better performance
-        enableWebGL: true, // Enable WebGL rendering if available
-        transform:
-          totalPages > 300
-            ? [qualityScale, 0, 0, qualityScale, 0, 0]
-            : undefined,
+        viewport: viewport,
       };
 
       await page.render(renderContext).promise;
 
-      // Convert to blob for memory efficiency with quality based on PDF size
-      return new Promise((resolve, reject) => {
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) {
-              reject(new Error("Failed to create blob from canvas"));
-              renderingPages.current.delete(pageNumber);
-              return;
-            }
+      // Convert canvas to base64 string
+      const base64Data = canvas.toDataURL("image/jpeg", renderQuality);
 
-            const url = URL.createObjectURL(blob);
-            pageCache.current[pageNumber] = url;
+      // Save base64 data to localStorage
+      localStorage.setItem(`page_${pageNumber}`, base64Data);
 
-            // Manage cache size - remove oldest entries if cache exceeds buffer size
-            prunePageCache(pageNumber);
+      // Save to cache
+      pageCache.current[pageNumber] = base64Data;
 
-            // Remove page from rendering set
-            renderingPages.current.delete(pageNumber);
+      // Remove page from rendering set
+      renderingPages.current.delete(pageNumber);
 
-            resolve(url);
-          },
-          "image/jpeg",
-          renderQuality // Adjust quality based on PDF size
-        );
-      });
+      return base64Data;
     } catch (error) {
       renderingPages.current.delete(pageNumber);
       console.error(`Error rendering page ${pageNumber}:`, error);
@@ -591,7 +559,6 @@ const FlipBook = () => {
   const handleReset = () => {
     clearLocalStorage();
     clearPageCache();
-
     setPdfDocument(null);
     setVisiblePages([]);
     setTotalPages(0);
@@ -602,6 +569,11 @@ const FlipBook = () => {
     setFullscreen(false);
     setZoomLevel(1);
     setFileName("");
+
+    // Remove all saved pages from localStorage
+    for (let i = 1; i <= totalPages; i++) {
+      localStorage.removeItem(`page_${i}`);
+    }
   };
 
   // Handle page change in FlipPage component
@@ -736,6 +708,17 @@ const FlipBook = () => {
       </div>
     );
   };
+
+  useEffect(() => {
+    const storedPages = [];
+    for (let i = 1; i <= totalPages; i++) {
+      const base64Data = localStorage.getItem(`page_${i}`);
+      if (base64Data) {
+        storedPages.push({ index: i - 1, url: base64Data });
+      }
+    }
+    setVisiblePages(storedPages);
+  }, [totalPages]);
 
   return (
     <div
